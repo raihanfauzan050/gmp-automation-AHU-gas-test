@@ -1,0 +1,24 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    command: ["gunicorn", "--workers", "1", "--bind", "0.0.0.0:5000", "--timeout", "600", "app:app"]
+    ports:
+      - "${HOST_PORT:-5001}:5000"
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - uploads:/app/uploads
+      - outputs:/app/outputs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/online')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  uploads:
+  outputs:
