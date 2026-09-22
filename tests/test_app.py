@@ -4,21 +4,18 @@ import unittest
 from unittest.mock import patch
 
 import app as app_module
-from ahu_utils import ahu_sort_key, default_ahu_for_test, extract_ahu_number
+from ahu_utils import ahu_sort_key, extract_ahu_number
 
 
 class AhuNumberTest(unittest.TestCase):
-    def test_airborne_defaults_to_ahu_33(self):
-        self.assertEqual(default_ahu_for_test('airborne_particle'), '33')
-        self.assertEqual(default_ahu_for_test('air_velocity'), 'unknown')
-        self.assertEqual(
-            extract_ahu_number(
-                'unknown',
-                '/tmp/airborne.pdf',
-                default=default_ahu_for_test('airborne_particle'),
-            ),
-            '33',
-        )
+    def test_returns_unknown_without_a_valid_ahu_identity(self):
+        self.assertEqual(extract_ahu_number('unknown', '/tmp/airborne.pdf'), 'unknown')
+        self.assertEqual(extract_ahu_number('0', '/tmp/airborne.pdf'), 'unknown')
+        self.assertEqual(extract_ahu_number('-33', '/tmp/airborne.pdf'), 'unknown')
+        self.assertEqual(extract_ahu_number('33.0', '/tmp/airborne.pdf'), 'unknown')
+        self.assertEqual(extract_ahu_number('33.5', '/tmp/airborne.pdf'), 'unknown')
+        self.assertEqual(extract_ahu_number('AHU-33.5', '/tmp/airborne.pdf'), 'unknown')
+        self.assertEqual(extract_ahu_number('unknown', '/tmp/AHU-33.5.pdf'), 'unknown')
 
     def test_sorts_numeric_and_text_ahu_values(self):
         self.assertEqual(
@@ -41,9 +38,92 @@ class AhuNumberTest(unittest.TestCase):
         self.assertEqual(extract_ahu_number('0', filename), '33')
         self.assertEqual(extract_ahu_number('AHU-0'), 'unknown')
 
-    def test_filename_ahu_overrides_an_incorrect_ocr_number(self):
+    def test_ocr_ahu_overrides_filename_ahu(self):
         filename = '/tmp/uuid_AHU-33_hepa_filter.pdf'
-        self.assertEqual(extract_ahu_number('1', filename), '33')
+        self.assertEqual(extract_ahu_number('42', filename), '42')
+
+
+class AhuProcessTest(unittest.TestCase):
+    TEST_CASES = {
+        'airborne_particle': ('rooms', [{'room': 'test'}]),
+        'air_velocity': ('machines', [{'machine': 'test'}]),
+        'air_change_rate': ('rooms', [{'room': 'test'}]),
+        'hepa_filter': ('items', [{'item': 'test'}]),
+    }
+
+    def test_processes_valid_pdfs_and_warns_about_missing_ahu_identity(self):
+        for test_type, (data_key, measurements) in self.TEST_CASES.items():
+            with self.subTest(test_type=test_type):
+                generated = {}
+
+                def extractor(path, api_key=None):
+                    ahu = 'unknown' if 'missing-ahu' in path else '42'
+                    return {'ahu': ahu, 'date': '2025.08.01', data_key: measurements}
+
+                def generator(records, output_path):
+                    generated['records'] = records
+
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    with (
+                        patch.object(app_module, 'ANTHROPIC_API_KEY', 'test-key'),
+                        patch.object(app_module, 'UPLOAD_FOLDER', temp_dir),
+                        patch.object(app_module, 'OUTPUT_FOLDER', temp_dir),
+                        patch.dict(app_module.CLAUDE_EXTRACTORS, {test_type: extractor}),
+                        patch.dict(app_module.GENERATORS, {test_type: generator}),
+                    ):
+                        response = app_module.app.test_client().post(
+                            '/process',
+                            data={
+                                'test_type': test_type,
+                                'language': 'en',
+                                'pdf_files': [
+                                    (BytesIO(b'%PDF-1.4'), 'AHU-33-valid.pdf'),
+                                    (BytesIO(b'%PDF-1.4'), 'missing-ahu.pdf'),
+                                ],
+                            },
+                            content_type='multipart/form-data',
+                        )
+
+                self.assertEqual(response.status_code, 200)
+                payload = response.get_json()
+                self.assertEqual(payload['ahu_list'], ['42'])
+                self.assertEqual(list(generated['records']), ['42'])
+                self.assertEqual(len(payload['warnings']), 1)
+                self.assertIn('missing-ahu.pdf', payload['warnings'][0])
+                self.assertIn('No valid AHU number', payload['warnings'][0])
+
+    def test_fails_when_every_pdf_lacks_an_ahu_identity(self):
+        def extractor(_path, api_key=None):
+            return {
+                'ahu': 'unknown',
+                'date': '2025.08.01',
+                'rooms': [{'room': 'test'}],
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(app_module, 'ANTHROPIC_API_KEY', 'test-key'),
+                patch.object(app_module, 'UPLOAD_FOLDER', temp_dir),
+                patch.object(app_module, 'OUTPUT_FOLDER', temp_dir),
+                patch.dict(
+                    app_module.CLAUDE_EXTRACTORS,
+                    {'airborne_particle': extractor},
+                ),
+            ):
+                response = app_module.app.test_client().post(
+                    '/process',
+                    data={
+                        'test_type': 'airborne_particle',
+                        'language': 'en',
+                        'pdf_files': (BytesIO(b'%PDF-1.4'), 'missing-ahu.pdf'),
+                    },
+                    content_type='multipart/form-data',
+                )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertIn('Failed to extract data from all PDFs', payload['error'])
+        self.assertIn('No valid AHU number', payload['error'])
 
 
 class GasAirborneProcessTest(unittest.TestCase):

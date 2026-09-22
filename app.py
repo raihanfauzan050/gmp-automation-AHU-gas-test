@@ -9,7 +9,7 @@ import uuid
 import traceback
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from werkzeug.utils import secure_filename
-from ahu_utils import ahu_sort_key, default_ahu_for_test, extract_ahu_number
+from ahu_utils import ahu_sort_key, extract_ahu_number
 from config import ANTHROPIC_API_KEY, UPLOAD_FOLDER, OUTPUT_FOLDER, get_semester_label, TEST_TYPES
 from ocr_engine import EXTRACTORS as CLAUDE_EXTRACTORS
 from excel_generator import GENERATORS
@@ -36,6 +36,7 @@ ERROR_MESSAGES = {
         'server_error': '서버 오류:',
         'processing_error': '처리 오류:',
         'empty_data': '측정표에서 데이터를 찾을 수 없습니다.',
+        'ahu_missing': '해당 공조기 필드와 파일명에서 유효한 AHU 번호를 찾을 수 없습니다.',
     },
     'en': {
         'invalid_test': 'Invalid test type selected.',
@@ -47,6 +48,7 @@ ERROR_MESSAGES = {
         'server_error': 'Server error:',
         'processing_error': 'Error processing:',
         'empty_data': 'No measurement data was found in the table.',
+        'ahu_missing': 'No valid AHU number was found in the 해당 공조기 field or filename.',
     },
 }
 
@@ -127,8 +129,9 @@ def process():
                 ahu_num = extract_ahu_number(
                     data.get('ahu'),
                     pdf_path,
-                    default=default_ahu_for_test(test_type),
                 )
+                if ahu_num == 'unknown':
+                    raise ValueError(messages['ahu_missing'])
                 date_str = data.get('date')
                 date_str = date_str or '2025.08.01'
                 semester_label = get_semester_label(date_str)
