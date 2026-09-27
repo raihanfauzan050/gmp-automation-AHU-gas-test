@@ -47,43 +47,53 @@ def call_claude_api(images_b64, prompt, api_key=None, image_descriptions=None):
         })
     content.append({"type": "text", "text": prompt})
 
-    payload = {
-        "model": ANTHROPIC_MODEL,
-        "max_tokens": 8192,
-        "messages": [{"role": "user", "content": content}]
-    }
-
     headers = {
         "Content-Type": "application/json",
         "x-api-key": key,
         "anthropic-version": "2023-06-01"
     }
 
-    response = requests.post(ANTHROPIC_API_URL, json=payload, headers=headers, timeout=300)
-
-    if response.status_code != 200:
-        raise Exception(f"Claude API Error {response.status_code}: {response.text}")
-
-    result = response.json()
-    text = ""
-    for block in result.get("content", []):
-        if block.get("type") == "text":
-            text += block["text"]
-
-    # Extract JSON from response
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    text = text.strip()
+    def request_json(request_content):
+        payload = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 16384,
+            "messages": [{"role": "user", "content": request_content}]
+        }
+        response = requests.post(ANTHROPIC_API_URL, json=payload, headers=headers, timeout=300)
+        if response.status_code != 200:
+            raise Exception(f"Claude API Error {response.status_code}: {response.text}")
+        result = response.json()
+        text = ''.join(
+            block.get("text", '')
+            for block in result.get("content", [])
+            if block.get("type") == "text"
+        ).strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return json.loads(text.strip())
 
     try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        raise Exception(f"Failed to parse Claude response as JSON: {e}\nResponse: {text[:500]}")
+        return request_json(content)
+    except json.JSONDecodeError as first_error:
+        retry_content = content + [{
+            "type": "text",
+            "text": (
+                "Your previous JSON output was invalid. Retry extraction. "
+                "Return one compact valid JSON object only. Do not use markdown. "
+                "Keep every required measurement row."
+            ),
+        }]
+        try:
+            return request_json(retry_content)
+        except json.JSONDecodeError as retry_error:
+            raise Exception(
+                f"Failed to parse Claude response as JSON after retry: {retry_error} "
+                f"(initial error: {first_error})"
+            ) from retry_error
 
 
 # =============================================================================

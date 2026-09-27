@@ -1,12 +1,33 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
 
+import ocr_engine
 from ocr_engine import extract_gas_airborne_particle
 
 
 class GasAirborneParticleOcrTest(unittest.TestCase):
+    @patch('ocr_engine.requests.post')
+    def test_retries_when_claude_returns_invalid_json(self, post):
+        invalid = SimpleNamespace(
+            status_code=200,
+            json=lambda: {'content': [{'type': 'text', 'text': '{ invalid'}]},
+        )
+        valid = SimpleNamespace(
+            status_code=200,
+            json=lambda: {'content': [{'type': 'text', 'text': '{"ahu":"1"}'}]},
+        )
+        post.side_effect = [invalid, valid]
+
+        result = ocr_engine.call_claude_api(['image'], 'Return JSON', api_key='test-key')
+
+        self.assertEqual(result, {'ahu': '1'})
+        self.assertEqual(post.call_count, 2)
+        retry_content = post.call_args.kwargs['json']['messages'][0]['content'][-1]['text']
+        self.assertIn('previous JSON output was invalid', retry_content)
+
     @patch('ocr_engine.call_claude_api')
     @patch('ocr_engine.pdf_to_images')
     def test_uses_enhanced_table_and_date_crops(self, pdf_to_images, call_claude_api):

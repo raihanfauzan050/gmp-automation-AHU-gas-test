@@ -125,6 +125,60 @@ class AhuProcessTest(unittest.TestCase):
         self.assertIn('Failed to extract data from all PDFs', payload['error'])
         self.assertIn('No valid AHU number', payload['error'])
 
+    def test_merges_multiple_batches_before_generating_excel(self):
+        generated = {}
+
+        def extractor(path, api_key=None):
+            ahu = '42' if 'first' in path else '43'
+            return {
+                'ahu': ahu,
+                'date': '2025.08.01',
+                'rooms': [{'room': ahu}],
+            }
+
+        def generator(records, output_path):
+            generated['records'] = records
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(app_module, 'ANTHROPIC_API_KEY', 'test-key'),
+                patch.object(app_module, 'UPLOAD_FOLDER', temp_dir),
+                patch.object(app_module, 'OUTPUT_FOLDER', temp_dir),
+                patch.dict(app_module.CLAUDE_EXTRACTORS, {'airborne_particle': extractor}),
+                patch.dict(app_module.GENERATORS, {'airborne_particle': generator}),
+            ):
+                client = app_module.app.test_client()
+                first = client.post(
+                    '/process',
+                    data={
+                        'test_type': 'airborne_particle',
+                        'language': 'en',
+                        'batch_id': 'test-batch',
+                        'batch_index': '0',
+                        'batch_total': '2',
+                        'pdf_files': (BytesIO(b'%PDF-1.4'), 'first.pdf'),
+                    },
+                    content_type='multipart/form-data',
+                )
+                second = client.post(
+                    '/process',
+                    data={
+                        'test_type': 'airborne_particle',
+                        'language': 'en',
+                        'batch_id': 'test-batch',
+                        'batch_index': '1',
+                        'batch_total': '2',
+                        'pdf_files': (BytesIO(b'%PDF-1.4'), 'second.pdf'),
+                    },
+                    content_type='multipart/form-data',
+                )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.get_json()['batch_complete'])
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(sorted(generated['records']), ['42', '43'])
+        self.assertEqual(second.get_json()['ahu_count'], 2)
+
 
 class GasAirborneProcessTest(unittest.TestCase):
     def test_processes_gas_airborne_in_one_request(self):

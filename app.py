@@ -57,6 +57,40 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _batch_state_path(batch_id):
+    """Return temporary state path for one multi-request upload job."""
+    if not batch_id or len(batch_id) > 64 or not all(c.isalnum() or c == '-' for c in batch_id):
+        raise ValueError('Invalid batch id')
+    batch_dir = os.path.join(UPLOAD_FOLDER, '.batches')
+    os.makedirs(batch_dir, exist_ok=True)
+    return os.path.join(batch_dir, f'{batch_id}.json')
+
+
+def _merge_batch_data(existing, current, test_type):
+    """Merge extracted records from one batch into accumulated job data."""
+    warnings = list(existing.get('warnings', [])) + list(current.get('warnings', []))
+    if test_type == 'gas_airborne_particle':
+        return {
+            'gas_records': existing.get('gas_records', []) + current.get('gas_records', []),
+            'ahu_data': {},
+            'warnings': warnings,
+        }
+
+    merged = {key: list(value) for key, value in existing.get('ahu_data', {}).items()}
+    for ahu, entries in current.get('ahu_data', {}).items():
+        existing_entries = merged.setdefault(ahu, [])
+        existing_keys = {(entry.get('semester'), entry.get('date')) for entry in existing_entries}
+        for entry in entries:
+            entry_key = (entry.get('semester'), entry.get('date'))
+            if entry_key in existing_keys:
+                warnings.append(
+                    f'Duplicate AHU {ahu} measurement for {entry.get("semester", "unknown semester")}.'
+                )
+            existing_entries.append(entry)
+            existing_keys.add(entry_key)
+    return {'ahu_data': merged, 'gas_records': [], 'warnings': warnings}
+
+
 @app.route('/')
 def index():
     """Redirect the root URL to the online OCR workflow."""
@@ -87,6 +121,17 @@ def process():
         files = request.files.getlist('pdf_files')
         if not files or all(f.filename == '' for f in files):
             return jsonify({'error': messages['no_files']}), 400
+
+        batch_id = request.form.get('batch_id')
+        try:
+            batch_index = int(request.form.get('batch_index', '0'))
+            batch_total = int(request.form.get('batch_total', '1'))
+        except ValueError:
+            return jsonify({'error': 'Invalid batch metadata.'}), 400
+        if batch_total < 1 or batch_index < 0 or batch_index >= batch_total:
+            return jsonify({'error': 'Invalid batch metadata.'}), 400
+        is_batched = batch_id is not None
+        state_path = _batch_state_path(batch_id) if is_batched else None
 
         # Save uploaded files
         saved_paths = []
@@ -157,6 +202,43 @@ def process():
             except Exception as e:
                 errors.append(f"{messages['processing_error']} {os.path.basename(pdf_path)}: {str(e)}")
 
+        current_data = {
+            'gas_records': all_gas_records,
+            'ahu_data': all_ahu_data,
+            'warnings': errors,
+        }
+        if is_batched:
+            existing_data = {}
+            if batch_index > 0:
+                if not os.path.exists(state_path):
+                    return jsonify({'error': 'Batch state not found. Restart upload.'}), 400
+                with open(state_path, 'r', encoding='utf-8') as state_file:
+                    existing_data = json.load(state_file)
+            merged_data = _merge_batch_data(existing_data, current_data, test_type)
+            if batch_index < batch_total - 1:
+                with open(state_path, 'w', encoding='utf-8') as state_file:
+                    json.dump(merged_data, state_file, ensure_ascii=False)
+                for path in saved_paths:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                return jsonify({
+                    'success': True,
+                    'batch_complete': True,
+                    'batch_index': batch_index,
+                    'batch_total': batch_total,
+                    'warnings': errors,
+                })
+            current_data = merged_data
+            try:
+                os.remove(state_path)
+            except FileNotFoundError:
+                pass
+
+        all_gas_records = current_data['gas_records']
+        all_ahu_data = current_data['ahu_data']
+        errors = current_data['warnings']
         collected_data = all_gas_records if is_gas_airborne else all_ahu_data
         if not collected_data:
             error_msg = messages['extract_failed']

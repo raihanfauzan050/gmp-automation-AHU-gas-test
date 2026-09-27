@@ -80,6 +80,14 @@
         .upload-area .text { color: #94a3b8; }
         .upload-area .subtext { color: #64748b; font-size: 0.85em; margin-top: 6px; }
 
+        .upload-summary {
+            display: inline-flex; align-items: center; gap: 7px;
+            margin-top: 14px; padding: 7px 11px; border-radius: 999px;
+            background: rgba(59, 130, 246, 0.12); color: #bfdbfe;
+            border: 1px solid rgba(96, 165, 250, 0.24); font-size: 0.85em;
+        }
+        .upload-summary[hidden] { display: none; }
+
         .file-list { margin-top: 12px; }
         .file-item {
             display: flex; align-items: center; gap: 8px; padding: 8px 12px;
@@ -223,6 +231,7 @@
                 <div class="subtext" data-i18n="uploadHint">PDF 파일만 가능 (여러 파일 동시 업로드 가능)</div>
             </div>
             <input type="file" id="fileInput" multiple accept=".pdf" style="display:none" onchange="handleFiles(this.files)">
+            <div id="fileCount" class="upload-summary" aria-live="polite" hidden></div>
             <div class="file-list" id="fileList"></div>
         </div>
 
@@ -248,13 +257,15 @@
                 hepaDesc: 'HEPA 필터 검사 → Excel (3 sheets/AHU)', gasAirborneDesc: '가스 품질 부유입자 측정 → Excel (등급별 Pivot)',
                 uploadPdf: 'PDF 파일 업로드', uploadAction: '클릭하거나 파일을 드래그하세요',
                 uploadHint: 'PDF 파일만 가능 (여러 파일 동시 업로드 가능)', generateExcel: 'Excel 파일 생성',
+                fileCount: '개 PDF 업로드 예정',
+                batchProgress: '배치', pdfProgress: 'PDF 처리 완료',
                 startGeneration: '🚀 Excel 자동 생성 시작', processing: '처리 중... (PDF 분석 중, 잠시 기다려주세요)',
-                processingStatus: '⏳ PDF를 AI가 분석하고 있습니다. PDF 수에 따라 1~5분 소요될 수 있습니다...',
+                processingStatus: '⏳ PDF를 AI가 분석하고 있습니다. 파일이 많으면 자동으로 여러 배치로 처리합니다...',
                 error: '❌ 오류:', success: '✅ 성공!', processed: '개의 AHU 데이터가 처리되었습니다.', recordsProcessed: '개의 측정 데이터가 처리되었습니다.', ahuList: 'AHU 목록:',
                 warning: '⚠️ 경고:', download: '다운로드', networkError: '❌ 네트워크 오류:',
                 toastErrorTitle: '처리 오류',
                 timeoutError: '처리 시간이 초과되었습니다. PDF 수를 줄여 여러 번 나누어 업로드해 주세요.',
-                uploadTooLarge: '전체 업로드 용량이 100MB를 초과했습니다. PDF를 여러 번 나누어 업로드해 주세요.',
+                uploadTooLarge: '배치 업로드 용량이 100MB를 초과했습니다. PDF 파일 크기를 확인해 주세요.',
                 serverRequestError: '서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 시도하거나 PDF를 나누어 업로드해 주세요.',
                 invalidResponse: '서버 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.',
                 networkErrorMessage: '서버에 연결할 수 없습니다. 네트워크 상태를 확인한 후 다시 시도해 주세요.',
@@ -266,13 +277,15 @@
                 velocityDesc: 'Air velocity measurement → Excel (3 sheets/AHU)', changeRateDesc: 'Air change rate measurement → Excel (3 sheets/AHU)',
                 hepaDesc: 'HEPA filter test → Excel (3 sheets/AHU)', gasAirborneDesc: 'Gas-quality airborne particle measurement → Excel (Pivot per grade)',
                 uploadPdf: 'Upload PDF Files', uploadAction: 'Click or drag files here', uploadHint: 'PDF files only (multiple files supported)',
+                fileCount: ' PDFs queued for upload',
+                batchProgress: 'Batch', pdfProgress: 'PDFs processed',
                 generateExcel: 'Generate Excel File', startGeneration: '🚀 Start Excel Generation',
-                processing: 'Processing... (Analyzing PDFs, please wait)', processingStatus: '⏳ AI is analyzing the PDFs. This may take 1 to 5 minutes depending on the number of files...',
+                processing: 'Processing... (Analyzing PDFs, please wait)', processingStatus: '⏳ AI is analyzing PDFs in automatic batches...',
                 error: '❌ Error:', success: '✅ Success!', processed: ' AHU data sets have been processed.', recordsProcessed: ' measurement records have been processed.', ahuList: 'AHU list:',
                 warning: '⚠️ Warnings:', download: 'Download', networkError: '❌ Network error:',
                 toastErrorTitle: 'Processing error',
                 timeoutError: 'Processing timed out. Upload fewer PDFs and process them in smaller batches.',
-                uploadTooLarge: 'The total upload exceeds 100 MB. Split the PDFs into smaller batches.',
+                uploadTooLarge: 'A batch exceeds 100 MB. Check PDF file sizes.',
                 serverRequestError: 'The server could not complete the request. Try again later or upload smaller batches.',
                 invalidResponse: 'The server returned an invalid response. Please try again later.',
                 networkErrorMessage: 'Unable to reach the server. Check your network connection and try again.',
@@ -289,6 +302,7 @@
             document.documentElement.lang = language;
             document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
             document.getElementById('uploadRules').innerHTML = t('uploadRules');
+            updateFileCount();
             document.querySelectorAll('[data-language]').forEach(button => {
                 button.classList.toggle('active', button.dataset.language === language);
             });
@@ -331,6 +345,7 @@
 
         function renderFileList() {
             const list = document.getElementById('fileList');
+            updateFileCount();
             if (uploadedFiles.length === 0) { list.innerHTML = ''; return; }
             list.innerHTML = uploadedFiles.map((f, i) =>
                 `<div class="file-item">
@@ -340,6 +355,12 @@
                     <span class="remove" onclick="removeFile(${i})">✕</span>
                 </div>`
             ).join('');
+        }
+
+        function updateFileCount() {
+            const count = document.getElementById('fileCount');
+            count.hidden = uploadedFiles.length === 0;
+            count.textContent = count.hidden ? '' : `📄 ${uploadedFiles.length}${t('fileCount')}`;
         }
 
         function updateSubmitBtn() {
@@ -403,6 +424,26 @@
             handleFiles(e.dataTransfer.files);
         });
 
+        function createBatches(files) {
+            const maxBatchBytes = 90 * 1024 * 1024;
+            const maxBatchFiles = 20;
+            const batches = [];
+            let batch = [];
+            let batchBytes = 0;
+            for (const file of files) {
+                if (batch.length > 0 &&
+                    (batch.length >= maxBatchFiles || batchBytes + file.size > maxBatchBytes)) {
+                    batches.push(batch);
+                    batch = [];
+                    batchBytes = 0;
+                }
+                batch.push(file);
+                batchBytes += file.size;
+            }
+            if (batch.length > 0) batches.push(batch);
+            return batches;
+        }
+
         async function processFiles() {
             const btn = document.getElementById('submitBtn');
             const statusMsg = document.getElementById('statusMsg');
@@ -415,55 +456,67 @@
             statusMsg.style.display = 'block';
             statusMsg.innerHTML = t('processingStatus');
             progressBar.style.display = 'block';
-            progressFill.style.width = '30%';
-
-            const formData = new FormData();
-            formData.append('test_type', selectedType);
-            formData.append('language', language);
-            uploadedFiles.forEach(f => formData.append('pdf_files', f));
-
-            const controller = new AbortController();
-            const timeoutId = window.setTimeout(() => controller.abort(), 11 * 60 * 1000);
+            progressFill.style.width = '5%';
+            const batches = createBatches(uploadedFiles);
+            let data = null;
             try {
-                progressFill.style.width = '60%';
-                const resp = await fetch('/process', {
-                    method: 'POST', body: formData, signal: controller.signal
-                });
-                const responseText = await resp.text();
-                let data = null;
-                if (responseText) {
-                    try {
-                        data = JSON.parse(responseText);
-                    } catch (_) {
-                        data = null;
-                    }
-                }
-                progressFill.style.width = '100%';
+                const batchId = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+                    byte => byte.toString(16).padStart(2, '0')).join('');
+                for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+                    const formData = new FormData();
+                    formData.append('test_type', selectedType);
+                    formData.append('language', language);
+                    formData.append('batch_id', batchId);
+                    formData.append('batch_index', String(batchIndex));
+                    formData.append('batch_total', String(batches.length));
+                    batches[batchIndex].forEach(f => formData.append('pdf_files', f));
 
-                if (!resp.ok || !data || data.error) {
-                    showProcessingError(statusMsg, data?.error || fallbackErrorForStatus(resp.status));
-                } else {
-                    statusMsg.className = 'status-msg success';
-                    let msg = `${t('success')} `;
-                    if (data.record_count !== undefined) {
-                        msg += `${data.record_count}${t('recordsProcessed')}<br>`;
-                    } else {
-                        msg += `${data.ahu_count}${t('processed')}<br>`;
-                        msg += `${t('ahuList')} ${data.ahu_list.map(a => 'AHU-' + a).join(', ')}<br>`;
+                    const controller = new AbortController();
+                    const timeoutId = window.setTimeout(() => controller.abort(), 11 * 60 * 1000);
+                    try {
+                        const firstPdf = batches.slice(0, batchIndex).reduce((count, batch) => count + batch.length, 0) + 1;
+                        const lastPdf = firstPdf + batches[batchIndex].length - 1;
+                        statusMsg.innerHTML = `${t('processingStatus')}<br>${t('batchProgress')} ${batchIndex + 1}/${batches.length}: PDF ${firstPdf}–${lastPdf} (${t('pdfProgress')}: ${firstPdf - 1}/${uploadedFiles.length})`;
+                        const resp = await fetch('/process', {
+                            method: 'POST', body: formData, signal: controller.signal
+                        });
+                        const responseText = await resp.text();
+                        let batchData = null;
+                        if (responseText) {
+                            try {
+                                batchData = JSON.parse(responseText);
+                            } catch (_) {
+                                batchData = null;
+                            }
+                        }
+                        if (!resp.ok || !batchData || batchData.error) {
+                            throw new Error(batchData?.error || fallbackErrorForStatus(resp.status));
+                        }
+                        data = batchData;
+                        progressFill.style.width = `${Math.round(((batchIndex + 1) / batches.length) * 100)}%`;
+                        statusMsg.innerHTML = `${t('processingStatus')}<br>${t('batchProgress')} ${batchIndex + 1}/${batches.length}: PDF ${firstPdf}–${lastPdf} (${t('pdfProgress')}: ${lastPdf}/${uploadedFiles.length})`;
+                    } finally {
+                        window.clearTimeout(timeoutId);
                     }
-                    if (data.warnings && data.warnings.length > 0) {
-                        msg += `<br>${t('warning')}<br>${data.warnings.join('<br>')}`;
-                    }
-                    msg += `<br><a href="${data.download_url}" class="download-btn">📥 ${data.filename} ${t('download')}</a>`;
-                    statusMsg.innerHTML = msg;
                 }
+                statusMsg.className = 'status-msg success';
+                let msg = `${t('success')} `;
+                if (data.record_count !== undefined) {
+                    msg += `${data.record_count}${t('recordsProcessed')}<br>`;
+                } else {
+                    msg += `${data.ahu_count}${t('processed')}<br>`;
+                    msg += `${t('ahuList')} ${data.ahu_list.map(a => 'AHU-' + a).join(', ')}<br>`;
+                }
+                if (data.warnings && data.warnings.length > 0) {
+                    msg += `<br>${t('warning')}<br>${data.warnings.join('<br>')}`;
+                }
+                msg += `<br><a href="${data.download_url}" class="download-btn">📥 ${data.filename} ${t('download')}</a>`;
+                statusMsg.innerHTML = msg;
             } catch (err) {
-                const message = err.name === 'AbortError'
-                    ? t('timeoutError')
-                    : t('networkErrorMessage');
+                const message = err.name === 'AbortError' ? t('timeoutError') : (err.message || t('networkErrorMessage'));
                 showProcessingError(statusMsg, message);
             } finally {
-                window.clearTimeout(timeoutId);
+                progressFill.style.width = data ? '100%' : progressFill.style.width;
             }
 
             btn.disabled = false;

@@ -200,5 +200,7 @@ python -m unittest discover -s tests -v
 - Test limits and measurement registrations are configured in `config.py`.
 - Airborne Pivot sheets are created only for grades found in the uploaded data; there is no first-half/second-half grade filter.
 - The upload limit is 100 MB per request.
+- Large selections are split automatically into batches of up to 20 PDFs or 90 MB. Batch results are merged into one final Excel report.
+- A failed batch stops processing without generating a partial final report. Retry the upload after correcting the failed PDFs.
 - Temporary uploaded PDFs are deleted automatically after an Excel report is generated successfully.
 - Reports use one fixed output filename per test type, so a later run of the same type replaces the previous generated report.
