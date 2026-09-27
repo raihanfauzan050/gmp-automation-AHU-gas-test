@@ -259,6 +259,7 @@
                 uploadHint: 'PDF 파일만 가능 (여러 파일 동시 업로드 가능)', generateExcel: 'Excel 파일 생성',
                 fileCount: '개 PDF 업로드 예정',
                 batchProgress: '배치', pdfProgress: 'PDF 처리 완료',
+                elapsedTime: '총 소요 시간', minutes: '분', seconds: '초',
                 startGeneration: '🚀 Excel 자동 생성 시작', processing: '처리 중... (PDF 분석 중, 잠시 기다려주세요)',
                 processingStatus: '⏳ PDF를 AI가 분석하고 있습니다. 파일이 많으면 자동으로 여러 배치로 처리합니다...',
                 error: '❌ 오류:', success: '✅ 성공!', processed: '개의 AHU 데이터가 처리되었습니다.', recordsProcessed: '개의 측정 데이터가 처리되었습니다.', ahuList: 'AHU 목록:',
@@ -279,6 +280,7 @@
                 uploadPdf: 'Upload PDF Files', uploadAction: 'Click or drag files here', uploadHint: 'PDF files only (multiple files supported)',
                 fileCount: ' PDFs queued for upload',
                 batchProgress: 'Batch', pdfProgress: 'PDFs processed',
+                elapsedTime: 'Total processing time', minutes: 'min', seconds: 'sec',
                 generateExcel: 'Generate Excel File', startGeneration: '🚀 Start Excel Generation',
                 processing: 'Processing... (Analyzing PDFs, please wait)', processingStatus: '⏳ AI is analyzing PDFs in automatic batches...',
                 error: '❌ Error:', success: '✅ Success!', processed: ' AHU data sets have been processed.', recordsProcessed: ' measurement records have been processed.', ahuList: 'AHU list:',
@@ -426,7 +428,7 @@
 
         function createBatches(files) {
             const maxBatchBytes = 90 * 1024 * 1024;
-            const maxBatchFiles = 20;
+            const maxBatchFiles = 1;
             const batches = [];
             let batch = [];
             let batchBytes = 0;
@@ -449,6 +451,7 @@
             const statusMsg = document.getElementById('statusMsg');
             const progressBar = document.getElementById('progressBar');
             const progressFill = document.getElementById('progressFill');
+            const startedAt = performance.now();
 
             btn.disabled = true;
             btn.innerHTML = '<span class="spinner"></span> ' + t('processing');
@@ -460,6 +463,9 @@
             const batches = createBatches(uploadedFiles);
             let data = null;
             try {
+                if (uploadedFiles.some(file => file.size > 90 * 1024 * 1024)) {
+                    throw new Error(t('uploadTooLarge'));
+                }
                 const batchId = Array.from(crypto.getRandomValues(new Uint8Array(16)),
                     byte => byte.toString(16).padStart(2, '0')).join('');
                 for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
@@ -507,6 +513,10 @@
                     msg += `${data.ahu_count}${t('processed')}<br>`;
                     msg += `${t('ahuList')} ${data.ahu_list.map(a => 'AHU-' + a).join(', ')}<br>`;
                 }
+                const elapsedSeconds = Math.round((performance.now() - startedAt) / 1000);
+                const minutes = Math.floor(elapsedSeconds / 60);
+                const seconds = elapsedSeconds % 60;
+                msg += `${t('elapsedTime')}: ${minutes} ${t('minutes')} ${seconds} ${t('seconds')}<br>`;
                 if (data.warnings && data.warnings.length > 0) {
                     msg += `<br>${t('warning')}<br>${data.warnings.join('<br>')}`;
                 }
