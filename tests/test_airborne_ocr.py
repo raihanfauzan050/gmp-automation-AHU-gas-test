@@ -1,12 +1,23 @@
 import unittest
+import base64
+from io import BytesIO
 from unittest.mock import patch
 
 from PIL import Image
 
-from ocr_engine import extract_airborne_particle
+from ocr_engine import extract_airborne_particle, image_to_base64
 
 
 class AirborneParticleOcrTest(unittest.TestCase):
+    def test_large_images_fit_anthropic_multi_image_limit_without_changing_source(self):
+        source = Image.new('RGB', (2200, 2600), 'white')
+
+        encoded = image_to_base64(source)
+        with Image.open(BytesIO(base64.b64decode(encoded))) as sent:
+            self.assertLessEqual(max(sent.size), 2000)
+            self.assertEqual(sent.size, (1692, 2000))
+        self.assertEqual(source.size, (2200, 2600))
+
     @patch('ocr_engine.call_claude_api')
     @patch('ocr_engine.pdf_to_images')
     def test_uses_printed_measurement_date_instead_of_wrong_full_page_date(

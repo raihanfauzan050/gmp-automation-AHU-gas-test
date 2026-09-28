@@ -12,7 +12,7 @@ import requests
 import os
 from pdf2image import convert_from_path
 from io import BytesIO
-from PIL import ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter
 from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL
 
 
@@ -25,6 +25,9 @@ def pdf_to_images(pdf_path, dpi=150):
 def image_to_base64(pil_image):
     """Convert PIL Image to base64 string."""
     buffer = BytesIO()
+    if max(pil_image.size) > 2000:
+        pil_image = pil_image.copy()
+        pil_image.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
     pil_image.save(buffer, format='PNG')
     return base64.standard_b64encode(buffer.getvalue()).decode('utf-8')
 
