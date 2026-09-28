@@ -56,6 +56,36 @@ class AhuProcessTest(unittest.TestCase):
         'hepa_filter': ('items', [{'item': 'test'}]),
     }
 
+    def test_missing_measurement_date_does_not_assign_a_semester(self):
+        generated = []
+
+        def extractor(_path, api_key=None):
+            return {'ahu': '33', 'date': '', 'rooms': [{'room': 'test'}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(app_module, 'ANTHROPIC_API_KEY', 'test-key'),
+                patch.object(app_module, 'UPLOAD_FOLDER', temp_dir),
+                patch.object(app_module, 'OUTPUT_FOLDER', temp_dir),
+                patch.dict(app_module.CLAUDE_EXTRACTORS, {'airborne_particle': extractor}),
+                patch.dict(app_module.GENERATORS, {
+                    'airborne_particle': lambda records, path: generated.append(records)
+                }),
+            ):
+                response = app_module.app.test_client().post(
+                    '/process',
+                    data={
+                        'test_type': 'airborne_particle',
+                        'language': 'en',
+                        'pdf_files': (BytesIO(b'%PDF-1.4'), 'AHU-33.pdf'),
+                    },
+                    content_type='multipart/form-data',
+                )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('date', response.get_json()['error'].lower())
+        self.assertEqual(generated, [])
+
     def test_falls_back_to_original_korean_filename(self):
         generated = {}
 
@@ -213,6 +243,44 @@ class AhuProcessTest(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(sorted(generated['records']), ['42', '43'])
         self.assertEqual(second.get_json()['ahu_count'], 2)
+
+    def test_failed_middle_batch_does_not_generate_partial_report(self):
+        generated = []
+
+        def extractor(path, api_key=None):
+            if '2025' in path:
+                raise ValueError('OCR temporarily unavailable')
+            return {'ahu': '2', 'date': '2024.08.02', 'rooms': [{'room': 'test'}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(app_module, 'ANTHROPIC_API_KEY', 'test-key'),
+                patch.object(app_module, 'UPLOAD_FOLDER', temp_dir),
+                patch.object(app_module, 'OUTPUT_FOLDER', temp_dir),
+                patch.dict(app_module.CLAUDE_EXTRACTORS, {'airborne_particle': extractor}),
+                patch.dict(app_module.GENERATORS, {
+                    'airborne_particle': lambda records, path: generated.append(records)
+                }),
+            ):
+                client = app_module.app.test_client()
+
+                def post(index, filename):
+                    return client.post('/process', data={
+                        'test_type': 'airborne_particle', 'language': 'en',
+                        'batch_id': 'missing-2025', 'batch_index': str(index),
+                        'batch_total': '3',
+                        'pdf_files': (BytesIO(b'%PDF-1.4'), filename),
+                    }, content_type='multipart/form-data')
+
+                first = post(0, 'AHU-2-2024.pdf')
+                second = post(1, 'AHU-2-2025.pdf')
+                last = post(2, 'AHU-2-2026.pdf')
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 400)
+        self.assertIn('OCR temporarily unavailable', second.get_json()['error'])
+        self.assertEqual(last.status_code, 400)
+        self.assertEqual(generated, [])
 
 
 class GasAirborneProcessTest(unittest.TestCase):

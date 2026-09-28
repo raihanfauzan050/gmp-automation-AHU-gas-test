@@ -37,6 +37,7 @@ ERROR_MESSAGES = {
         'processing_error': '처리 오류:',
         'empty_data': '측정표에서 데이터를 찾을 수 없습니다.',
         'ahu_missing': '해당 공조기 필드와 파일명에서 유효한 AHU 번호를 찾을 수 없습니다.',
+        'date_missing': '측정일자를 읽을 수 없습니다.',
     },
     'en': {
         'invalid_test': 'Invalid test type selected.',
@@ -49,6 +50,7 @@ ERROR_MESSAGES = {
         'processing_error': 'Error processing:',
         'empty_data': 'No measurement data was found in the table.',
         'ahu_missing': 'No valid AHU number was found in the 해당 공조기 field or filename.',
+        'date_missing': 'Measurement date could not be read.',
     },
 }
 
@@ -180,7 +182,8 @@ def process():
                 if ahu_num == 'unknown':
                     raise ValueError(messages['ahu_missing'])
                 date_str = data.get('date')
-                date_str = date_str or '2025.08.01'
+                if not date_str or not str(date_str).strip():
+                    raise ValueError(messages['date_missing'])
                 semester_label = get_semester_label(date_str)
 
                 # Organize data by AHU
@@ -203,6 +206,14 @@ def process():
 
             except Exception as e:
                 errors.append(f"{messages['processing_error']} {os.path.basename(pdf_path)}: {str(e)}")
+
+        if is_batched and errors:
+            for path in saved_paths + [state_path]:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+            return jsonify({'error': messages['extract_failed'] + '\n' + '\n'.join(errors)}), 400
 
         current_data = {
             'gas_records': all_gas_records,

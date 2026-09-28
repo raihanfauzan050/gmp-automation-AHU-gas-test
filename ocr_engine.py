@@ -6,6 +6,7 @@ Uses Anthropic Claude API to extract structured data from scanned PDF images.
 import base64
 import json
 import re
+from datetime import datetime
 import requests
 import os
 from pdf2image import convert_from_path
@@ -137,6 +138,10 @@ IMPORTANT RULES:
 - The AHU value may be beside or below the label and may appear as 공조기-33, 공조기 번호 33, 공조기 No. 33, AHU No. 33, or a bare 33 in the value cell. Return only "33".
 - Never infer AHU from NO, 측정번호, particle sizes such as 0.5 µm, or measurement values; return "unknown" if unreadable
 - Return ONLY the JSON, no markdown, no explanation"""
+
+PROMPT_AIRBORNE_DATE = """Read only the printed 측정일자 (measurement date) column in this image.
+Do not read handwritten signature dates or 시행일자. If it is a date range, use the first date.
+Return only JSON: {"date": "YYYY.MM.DD"}. If the date is unreadable, return {"date": ""}."""
 
 
 PROMPT_AIR_VELOCITY = """You are analyzing a scanned Korean GMP document: 풍속 측정 기록서 (Air Velocity Test Record).
@@ -319,8 +324,13 @@ def _normalize_gas_airborne_data(payload):
                 continue
             value = float(match.group(0).replace(',', ''))
             particle_values.append(int(value) if value.is_integer() else value)
-        if particle_values == [None, None]:
-            continue
+        for field, value in zip(('particle_05', 'particle_50'), particle_values):
+            if value is None:
+                raise ValueError(f'Gas measurement row {index}: unreadable {field}')
+
+        judgement = str(row.get('judgement', '')).strip()
+        if judgement not in ('적합', '부적합'):
+            raise ValueError(f'Gas measurement row {index}: unreadable judgement')
 
         date_match = re.search(
             r'(20\d{2})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})',
@@ -336,9 +346,9 @@ def _normalize_gas_airborne_data(payload):
             'management_number': management_number,
             'location': location,
             'grade': str(row.get('grade', '')).strip().upper(),
-            'particle_05': particle_values[0] if particle_values[0] is not None else 0,
-            'particle_50': particle_values[1] if particle_values[1] is not None else 0,
-            'judgement': '부적합' if str(row.get('judgement', '')).strip() == '부적합' else '적합',
+            'particle_05': particle_values[0],
+            'particle_50': particle_values[1],
+            'judgement': judgement,
             'criteria_text': str(row.get('criteria_text', '')).strip(),
             'performed_date': performed_date,
         }
@@ -357,7 +367,25 @@ def extract_airborne_particle(pdf_path, api_key=None):
     """Extract data from Airborne Particle Test PDF."""
     images = pdf_to_images(pdf_path)
     images_b64 = [image_to_base64(img) for img in images]
-    return call_claude_api(images_b64, PROMPT_AIRBORNE_PARTICLE, api_key)
+    data = call_claude_api(images_b64, PROMPT_AIRBORNE_PARTICLE, api_key)
+    if not images:
+        raise ValueError('No PDF pages available to read the measurement date')
+
+    width, height = images[0].size
+    date_detail = images[0].crop((
+        int(width * 0.60), int(height * 0.12),
+        int(width * 0.79), int(height * 0.36),
+    ))
+    date_data = call_claude_api([image_to_base64(date_detail)], PROMPT_AIRBORNE_DATE, api_key)
+    date = str(date_data.get('date') or '').strip()
+    try:
+        if not re.fullmatch(r'20\d{2}\.\d{2}\.\d{2}', date):
+            raise ValueError
+        datetime.strptime(date, '%Y.%m.%d')
+    except ValueError:
+        raise ValueError('Could not read the printed measurement date') from None
+    data['date'] = date
+    return data
 
 
 def extract_air_velocity(pdf_path, api_key=None):
