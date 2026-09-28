@@ -199,8 +199,10 @@ python -m unittest discover -s tests -v
 - OCR requests may incur charges depending on your Anthropic account usage.
 - Test limits and measurement registrations are configured in `config.py`.
 - Airborne Pivot sheets are created only for grades found in the uploaded data; there is no first-half/second-half grade filter.
+- Airborne room charts group ordinary rooms by grade and room number across semesters, even if OCR varies the room name. BSC and PASS BOX equipment stay separate. Multiple ordinary-room measurements with the same grade, room number, and semester stop report generation for review rather than silently dropping a value.
 - The upload limit is 100 MB per request.
 - Large selections are processed one PDF per request (up to 90 MB per PDF). Results are merged into one final Excel report. Progress updates after each PDF completes.
+- Up to two PDFs are analyzed concurrently; a rate-limited Anthropic request is retried once. This requires two server workers and may increase memory usage or trigger account rate limits.
 - A failed batch stops processing without generating a partial final report. Retry the upload after correcting the failed PDFs.
 - Temporary uploaded PDFs are deleted automatically after an Excel report is generated successfully.
 - Reports use one fixed output filename per test type, so a later run of the same type replaces the previous generated report.

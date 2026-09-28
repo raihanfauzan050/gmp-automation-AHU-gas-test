@@ -30,4 +30,4 @@ echo "  Press Ctrl+C to stop the server."
 echo "============================================================"
 echo ""
 
-exec python3 -m gunicorn --workers 1 --bind 0.0.0.0:5001 --timeout 600 app:app
+exec python3 -m gunicorn --workers 2 --bind 0.0.0.0:5001 --timeout 600 app:app

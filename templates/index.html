@@ -259,6 +259,7 @@
                 uploadHint: 'PDF 파일만 가능 (여러 파일 동시 업로드 가능)', generateExcel: 'Excel 파일 생성',
                 fileCount: '개 PDF 업로드 예정',
                 batchProgress: '배치', pdfProgress: 'PDF 처리 완료',
+                generatingReport: 'Excel 파일을 생성하고 있습니다...',
                 elapsedTime: '총 소요 시간', minutes: '분', seconds: '초',
                 startGeneration: '🚀 Excel 자동 생성 시작', processing: '처리 중... (PDF 분석 중, 잠시 기다려주세요)',
                 processingStatus: '⏳ PDF를 AI가 분석하고 있습니다. 파일이 많으면 자동으로 여러 배치로 처리합니다...',
@@ -280,6 +281,7 @@
                 uploadPdf: 'Upload PDF Files', uploadAction: 'Click or drag files here', uploadHint: 'PDF files only (multiple files supported)',
                 fileCount: ' PDFs queued for upload',
                 batchProgress: 'Batch', pdfProgress: 'PDFs processed',
+                generatingReport: 'Generating Excel report...',
                 elapsedTime: 'Total processing time', minutes: 'min', seconds: 'sec',
                 generateExcel: 'Generate Excel File', startGeneration: '🚀 Start Excel Generation',
                 processing: 'Processing... (Analyzing PDFs, please wait)', processingStatus: '⏳ AI is analyzing PDFs in automatic batches...',
@@ -462,49 +464,71 @@
             progressFill.style.width = '5%';
             const batches = createBatches(uploadedFiles);
             let data = null;
+            let batchId = null;
             try {
                 if (uploadedFiles.some(file => file.size > 90 * 1024 * 1024)) {
                     throw new Error(t('uploadTooLarge'));
                 }
-                const batchId = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+                batchId = Array.from(crypto.getRandomValues(new Uint8Array(16)),
                     byte => byte.toString(16).padStart(2, '0')).join('');
-                for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-                    const formData = new FormData();
-                    formData.append('test_type', selectedType);
-                    formData.append('language', language);
-                    formData.append('batch_id', batchId);
-                    formData.append('batch_index', String(batchIndex));
-                    formData.append('batch_total', String(batches.length));
-                    batches[batchIndex].forEach(f => formData.append('pdf_files', f));
 
+                async function sendRequest(url, formData) {
                     const controller = new AbortController();
                     const timeoutId = window.setTimeout(() => controller.abort(), 11 * 60 * 1000);
                     try {
-                        const firstPdf = batches.slice(0, batchIndex).reduce((count, batch) => count + batch.length, 0) + 1;
-                        const lastPdf = firstPdf + batches[batchIndex].length - 1;
-                        statusMsg.innerHTML = `${t('processingStatus')}<br>${t('batchProgress')} ${batchIndex + 1}/${batches.length}: PDF ${firstPdf}–${lastPdf} (${t('pdfProgress')}: ${firstPdf - 1}/${uploadedFiles.length})`;
-                        const resp = await fetch('/process', {
+                        const resp = await fetch(url, {
                             method: 'POST', body: formData, signal: controller.signal
                         });
                         const responseText = await resp.text();
-                        let batchData = null;
+                        let result = null;
                         if (responseText) {
-                            try {
-                                batchData = JSON.parse(responseText);
-                            } catch (_) {
-                                batchData = null;
-                            }
+                            try { result = JSON.parse(responseText); } catch (_) { /* use fallback */ }
                         }
-                        if (!resp.ok || !batchData || batchData.error) {
-                            throw new Error(batchData?.error || fallbackErrorForStatus(resp.status));
+                        if (!resp.ok || !result || result.error) {
+                            throw new Error(result?.error || fallbackErrorForStatus(resp.status));
                         }
-                        data = batchData;
-                        progressFill.style.width = `${Math.round(((batchIndex + 1) / batches.length) * 100)}%`;
-                        statusMsg.innerHTML = `${t('processingStatus')}<br>${t('batchProgress')} ${batchIndex + 1}/${batches.length}: PDF ${firstPdf}–${lastPdf} (${t('pdfProgress')}: ${lastPdf}/${uploadedFiles.length})`;
+                        return result;
                     } finally {
                         window.clearTimeout(timeoutId);
                     }
                 }
+
+                let nextIndex = 0;
+                let completed = 0;
+                let failure = null;
+                async function worker() {
+                    while (nextIndex < batches.length && !failure) {
+                        const batchIndex = nextIndex++;
+                        const formData = new FormData();
+                        formData.append('test_type', selectedType);
+                        formData.append('language', language);
+                        formData.append('batch_id', batchId);
+                        formData.append('batch_index', String(batchIndex));
+                        formData.append('batch_total', String(batches.length));
+                        formData.append('parallel', '1');
+                        batches[batchIndex].forEach(f => formData.append('pdf_files', f));
+                        try {
+                            await sendRequest('/process', formData);
+                            completed++;
+                            progressFill.style.width = `${Math.round(completed / batches.length * 90)}%`;
+                            statusMsg.textContent = `${t('processingStatus')} ${t('pdfProgress')}: ${completed}/${uploadedFiles.length}`;
+                        } catch (err) {
+                            failure = err;
+                        }
+                    }
+                }
+                statusMsg.textContent = `${t('processingStatus')} ${t('pdfProgress')}: 0/${uploadedFiles.length}`;
+                await Promise.all(Array.from({length: Math.min(2, batches.length)}, () => worker()));
+                if (failure) throw failure;
+
+                statusMsg.textContent = t('generatingReport');
+                const completeForm = new FormData();
+                completeForm.append('test_type', selectedType);
+                completeForm.append('language', language);
+                completeForm.append('batch_id', batchId);
+                completeForm.append('batch_total', String(batches.length));
+                data = await sendRequest('/process/complete', completeForm);
+                progressFill.style.width = '100%';
                 statusMsg.className = 'status-msg success';
                 let msg = `${t('success')} `;
                 if (data.record_count !== undefined) {
@@ -525,13 +549,17 @@
             } catch (err) {
                 const message = err.name === 'AbortError' ? t('timeoutError') : (err.message || t('networkErrorMessage'));
                 showProcessingError(statusMsg, message);
+                if (batchId) {
+                    const cancelForm = new FormData();
+                    cancelForm.append('batch_id', batchId);
+                    cancelForm.append('batch_total', String(batches.length));
+                    fetch('/process/cancel', {method: 'POST', body: cancelForm}).catch(() => {});
+                }
             } finally {
-                progressFill.style.width = data ? '100%' : progressFill.style.width;
+                btn.disabled = false;
+                btn.textContent = t('startGeneration');
+                updateSubmitBtn();
             }
-
-            btn.disabled = false;
-            btn.textContent = t('startGeneration');
-            updateSubmitBtn();
         }
     </script>
 </body>

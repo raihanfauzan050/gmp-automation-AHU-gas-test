@@ -2,7 +2,7 @@ services:
   app:
     build: .
     restart: unless-stopped
-    command: ["gunicorn", "--workers", "1", "--bind", "0.0.0.0:5000", "--timeout", "600", "app:app"]
+    command: ["gunicorn", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "600", "app:app"]
     ports:
       - "${HOST_PORT:-5001}:5000"
     env_file:

@@ -244,6 +244,70 @@ class AhuProcessTest(unittest.TestCase):
         self.assertEqual(sorted(generated['records']), ['42', '43'])
         self.assertEqual(second.get_json()['ahu_count'], 2)
 
+    def test_parallel_pdfs_complete_in_upload_order(self):
+        generated = []
+
+        def extractor(path, api_key=None):
+            ahu = '42' if 'first' in path else '43'
+            return {'ahu': ahu, 'date': '2025.08.01', 'rooms': [{'room': ahu}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(app_module, 'ANTHROPIC_API_KEY', 'test-key'),
+                patch.object(app_module, 'UPLOAD_FOLDER', temp_dir),
+                patch.object(app_module, 'OUTPUT_FOLDER', temp_dir),
+                patch.dict(app_module.CLAUDE_EXTRACTORS, {'airborne_particle': extractor}),
+                patch.dict(app_module.GENERATORS, {
+                    'airborne_particle': lambda records, path: generated.append(records)
+                }),
+            ):
+                client = app_module.app.test_client()
+                for index, filename in ((1, 'second.pdf'), (0, 'first.pdf')):
+                    response = client.post('/process', data={
+                        'test_type': 'airborne_particle', 'language': 'en',
+                        'batch_id': 'parallel-job', 'batch_index': str(index),
+                        'batch_total': '2', 'parallel': '1',
+                        'pdf_files': (BytesIO(b'%PDF-1.4'), filename),
+                    }, content_type='multipart/form-data')
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(generated, [])
+
+                complete = client.post('/process/complete', data={
+                    'test_type': 'airborne_particle', 'language': 'en',
+                    'batch_id': 'parallel-job', 'batch_total': '2',
+                })
+                self.assertEqual(complete.status_code, 200)
+                self.assertEqual(complete.get_json()['ahu_list'], ['42', '43'])
+                self.assertEqual(list(generated[0]), ['42', '43'])
+                self.assertEqual(len(generated), 1)
+
+    def test_parallel_completion_requires_all_pdfs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(app_module, 'ANTHROPIC_API_KEY', 'test-key'),
+                patch.object(app_module, 'UPLOAD_FOLDER', temp_dir),
+                patch.dict(app_module.CLAUDE_EXTRACTORS, {'airborne_particle': lambda path, api_key=None: {
+                    'ahu': '42', 'date': '2025.08.01', 'rooms': [{'room': 'test'}],
+                }}),
+            ):
+                client = app_module.app.test_client()
+                response = client.post('/process', data={
+                    'test_type': 'airborne_particle', 'batch_id': 'incomplete',
+                    'batch_index': '0', 'batch_total': '2', 'parallel': '1',
+                    'pdf_files': (BytesIO(b'%PDF-1.4'), 'AHU-42.pdf'),
+                }, content_type='multipart/form-data')
+                self.assertEqual(response.status_code, 200)
+                complete = client.post('/process/complete', data={
+                    'test_type': 'airborne_particle', 'batch_id': 'incomplete',
+                    'batch_total': '2',
+                })
+                self.assertEqual(complete.status_code, 400)
+                self.assertIn('not finished', complete.get_json()['error'])
+                cancel = client.post('/process/cancel', data={
+                    'batch_id': 'incomplete', 'batch_total': '2',
+                })
+                self.assertEqual(cancel.status_code, 200)
+
     def test_failed_middle_batch_does_not_generate_partial_report(self):
         generated = []
 

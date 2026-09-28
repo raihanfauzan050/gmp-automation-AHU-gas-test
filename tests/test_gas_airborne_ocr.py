@@ -9,6 +9,22 @@ from ocr_engine import extract_gas_airborne_particle
 
 
 class GasAirborneParticleOcrTest(unittest.TestCase):
+    @patch('ocr_engine.time.sleep')
+    @patch('ocr_engine.requests.post')
+    def test_retries_rate_limit_once(self, post, sleep):
+        limited = SimpleNamespace(status_code=429, headers={'retry-after': '3'}, text='rate limit')
+        valid = SimpleNamespace(
+            status_code=200,
+            json=lambda: {'content': [{'type': 'text', 'text': '{"records":[]}'}]},
+        )
+        post.side_effect = [limited, valid]
+
+        result = ocr_engine.call_claude_api(['image'], 'Return JSON', api_key='test-key')
+
+        self.assertEqual(result, {'records': []})
+        sleep.assert_called_once_with(3.0)
+        self.assertEqual(post.call_count, 2)
+
     def test_rejects_unreadable_measurement_instead_of_inventing_zero(self):
         row = {
             'no': '1', 'management_number': 'CA-01', 'location': '충전 3실',

@@ -6,6 +6,7 @@ Uses Anthropic Claude API to extract structured data from scanned PDF images.
 import base64
 import json
 import re
+import time
 from datetime import datetime
 import requests
 import os
@@ -61,6 +62,14 @@ def call_claude_api(images_b64, prompt, api_key=None, image_descriptions=None):
             "messages": [{"role": "user", "content": request_content}]
         }
         response = requests.post(ANTHROPIC_API_URL, json=payload, headers=headers, timeout=300)
+        if response.status_code == 429:
+            retry_after = getattr(response, 'headers', {}).get('retry-after', '2')
+            try:
+                delay = min(max(float(retry_after), 0), 30)
+            except ValueError:
+                delay = 2
+            time.sleep(delay)
+            response = requests.post(ANTHROPIC_API_URL, json=payload, headers=headers, timeout=300)
         if response.status_code != 200:
             raise Exception(f"Claude API Error {response.status_code}: {response.text}")
         result = response.json()
@@ -142,6 +151,13 @@ IMPORTANT RULES:
 PROMPT_AIRBORNE_DATE = """Read only the printed 측정일자 (measurement date) column in this image.
 Do not read handwritten signature dates or 시행일자. If it is a date range, use the first date.
 Return only JSON: {"date": "YYYY.MM.DD"}. If the date is unreadable, return {"date": ""}."""
+
+PROMPT_AIRBORNE_GRADE = """Check the printed 청정등급 (cleanroom grade) for each requested 실번호 (room number).
+The horizontal and vertical table borders may cross the letter D and make it look like B.
+Read the letter itself carefully. Do not infer the grade from particle counts, room names, or date.
+If the letter is unclear, use "unknown" instead of guessing.
+Return only JSON: {{"grades": [{{"room_number": "2401", "grade": "D"}}]}}.
+Requested room numbers: {room_numbers}"""
 
 
 PROMPT_AIR_VELOCITY = """You are analyzing a scanned Korean GMP document: 풍속 측정 기록서 (Air Velocity Test Record).
@@ -370,6 +386,32 @@ def extract_airborne_particle(pdf_path, api_key=None):
     data = call_claude_api(images_b64, PROMPT_AIRBORNE_PARTICLE, api_key)
     if not images:
         raise ValueError('No PDF pages available to read the measurement date')
+
+    grade_b_rooms = [room for room in data.get('rooms', []) if str(room.get('grade', '')).strip().upper() == 'B']
+    if grade_b_rooms:
+        # Recheck only B: a table border can turn the printed D into a false B.
+        grade_images = []
+        for image in pdf_to_images(pdf_path, dpi=250):
+            width, height = image.size
+            for top, bottom in ((0, height // 2), (height // 2, height)):
+                grade_images.append(image_to_base64(image.crop((int(width * 0.10), top, int(width * 0.95), bottom))))
+
+        room_numbers = list(dict.fromkeys(str(room.get('room_number', '')).strip() for room in grade_b_rooms))
+        grade_data = call_claude_api(
+            grade_images,
+            PROMPT_AIRBORNE_GRADE.format(room_numbers=', '.join(room_numbers)),
+            api_key,
+        )
+        checked_grades = {
+            str(item.get('room_number', '')).strip(): str(item.get('grade', '')).strip().upper()
+            for item in grade_data.get('grades', [])
+        }
+        for room in grade_b_rooms:
+            room_number = str(room.get('room_number', '')).strip()
+            grade = checked_grades.get(room_number)
+            if grade not in ('B', 'D'):
+                raise ValueError(f'Could not confirm cleanroom grade for room {room_number}')
+            room['grade'] = grade
 
     width, height = images[0].size
     date_detail = images[0].crop((

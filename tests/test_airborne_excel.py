@@ -39,7 +39,7 @@ class AirborneParticleExcelTest(unittest.TestCase):
         ])
         self.assertEqual(chart['E3'].value, "='AHU-33 Table'!$E$4")
 
-    def test_keeps_distinct_names_in_same_room_and_semester_separate(self):
+    def test_rejects_ambiguous_room_number_in_same_semester(self):
         def room(name):
             return {
                 'grade': 'C', 'room_number': '2148', 'room_name': name,
@@ -53,14 +53,28 @@ class AirborneParticleExcelTest(unittest.TestCase):
         ]}
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, 'airborne.xlsx')
-            generate_airborne_particle_excel(data, path)
-            workbook = load_workbook(path)
+            with self.assertRaisesRegex(ValueError, '2148.*2025 \\(하\\)'):
+                generate_airborne_particle_excel(data, path)
+            self.assertFalse(os.path.exists(path))
 
-        chart = workbook['AHU-33 Pivot 0.5µm Grade C']
-        self.assertEqual(chart.max_row, 3)
-        self.assertEqual(chart['D2'].value, "='AHU-33 Table'!$E$2")
-        self.assertEqual(chart['E2'].value, "='AHU-33 Table'!$E$4")
-        self.assertEqual(chart['D3'].value, "='AHU-33 Table'!$E$3")
+    def test_rejects_ocr_variant_collision_instead_of_splitting_chart(self):
+        def room(name):
+            return {
+                'grade': 'C', 'room_number': '2148', 'room_name': name,
+                'measurements': [{'point': 1, 'value_05': 1, 'value_50': 0}],
+            }
+
+        data = {'33': [
+            {'semester': '2024 (하)', 'date': '2024.08.01', 'rooms': [room('작업실')]},
+            {'semester': '2025 (하)', 'date': '2025.08.01',
+             'rooms': [room('작엽실'), room('검사실')]},
+            {'semester': '2026 (하)', 'date': '2026.08.01', 'rooms': [room('작업실')]},
+        ]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, 'airborne.xlsx')
+            with self.assertRaisesRegex(ValueError, '2148.*2025 \\(하\\)'):
+                generate_airborne_particle_excel(data, path)
 
     def test_airborne_averages_are_whole_numbers_in_data_and_table(self):
         room = {

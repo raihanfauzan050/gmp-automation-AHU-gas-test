@@ -826,24 +826,21 @@ def _create_airborne_chart_sheet(wb, ahu_num, table_ws, particle_size, selected_
                           },
                           'value_ref': _cell_link_formula(table_ws, r, value_col)})
 
-    # A room number identifies the same room across semesters even if OCR
-    # slightly changes its Korean name. Keep named equipment (BSC, PASS BOX,
-    # asset IDs) separate, and do not merge ambiguous rooms within one period.
-    room_names_by_period = {}
+    # Room identity is grade + room number, independent of OCR spelling.
+    # Equipment in the same room has its own category. Never silently discard
+    # a second measurement for the same room and semester.
+    room_periods = set()
     for row in data_rows:
         grade_key, room_key, name_key = row['category_id']
-        if room_key.isdigit() and re.fullmatch(r'[가-힣]+', name_key):
-            periods = room_names_by_period.setdefault((grade_key, room_key), {})
-            periods.setdefault(row['semester'], set()).add(name_key)
-    ambiguous_rooms = {
-        key for key, periods in room_names_by_period.items()
-        if any(len(names) > 1 for names in periods.values())
-    }
-    for row in data_rows:
-        grade_key, room_key, name_key = row['category_id']
-        if ((grade_key, room_key) in room_names_by_period
-                and (grade_key, room_key) not in ambiguous_rooms
-                and re.fullmatch(r'[가-힣]+', name_key)):
+        is_equipment = any(marker in name_key for marker in ('bsc', 'passbox', 'biosafetycabinet'))
+        if room_key.isdigit() and not is_equipment:
+            period_key = (grade_key, room_key, row['semester'])
+            if period_key in room_periods:
+                raise ValueError(
+                    f'AHU-{ahu_num} has multiple Grade {row["grade"]} measurements '
+                    f'for room {room_key} in {row["semester"]}; check the source PDFs.'
+                )
+            room_periods.add(period_key)
             row['category_id'] = (grade_key, room_key, 'room')
 
     semesters = sorted({d['semester'] for d in data_rows if d['semester']}, key=semester_sort_key)

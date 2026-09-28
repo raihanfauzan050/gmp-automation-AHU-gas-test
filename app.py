@@ -93,6 +93,39 @@ def _merge_batch_data(existing, current, test_type):
     return {'ahu_data': merged, 'gas_records': [], 'warnings': warnings}
 
 
+def _parallel_state_path(batch_id, batch_index):
+    return _batch_state_path(f'{batch_id}-{batch_index}')
+
+
+def _generate_report(current_data, test_type, messages):
+    all_gas_records = current_data['gas_records']
+    all_ahu_data = current_data['ahu_data']
+    errors = current_data['warnings']
+    is_gas_airborne = test_type == 'gas_airborne_particle'
+    collected_data = all_gas_records if is_gas_airborne else all_ahu_data
+    if not collected_data:
+        error_msg = messages['extract_failed']
+        if errors:
+            error_msg += '\n' + '\n'.join(errors)
+        return jsonify({'error': error_msg}), 400
+
+    output_filename = TEST_TYPES[test_type]['excel_filename']
+    GENERATORS[test_type](collected_data, os.path.join(OUTPUT_FOLDER, output_filename))
+    result = {
+        'success': True,
+        'filename': output_filename,
+        'download_url': f'/download/{output_filename}',
+    }
+    if is_gas_airborne:
+        result['record_count'] = len(all_gas_records)
+    else:
+        result['ahu_count'] = len(all_ahu_data)
+        result['ahu_list'] = sorted(all_ahu_data.keys(), key=ahu_sort_key)
+    if errors:
+        result['warnings'] = errors
+    return jsonify(result)
+
+
 @app.route('/')
 def index():
     """Redirect the root URL to the online OCR workflow."""
@@ -134,6 +167,7 @@ def process():
             return jsonify({'error': 'Invalid batch metadata.'}), 400
         is_batched = batch_id is not None
         state_path = _batch_state_path(batch_id) if is_batched else None
+        is_parallel = is_batched and request.form.get('parallel') == '1'
 
         # Save uploaded files
         saved_paths = []
@@ -208,7 +242,7 @@ def process():
                 errors.append(f"{messages['processing_error']} {os.path.basename(pdf_path)}: {str(e)}")
 
         if is_batched and errors:
-            for path in saved_paths + [state_path]:
+            for path in saved_paths + ([] if is_parallel else [state_path]):
                 try:
                     os.remove(path)
                 except FileNotFoundError:
@@ -220,6 +254,15 @@ def process():
             'ahu_data': all_ahu_data,
             'warnings': errors,
         }
+        if is_parallel:
+            parallel_path = _parallel_state_path(batch_id, batch_index)
+            with open(parallel_path, 'w', encoding='utf-8') as state_file:
+                json.dump({'test_type': test_type, 'batch_total': batch_total, 'data': current_data},
+                          state_file, ensure_ascii=False)
+            for path in saved_paths:
+                os.remove(path)
+            return jsonify({'success': True, 'batch_complete': True, 'batch_index': batch_index})
+
         if is_batched:
             existing_data = {}
             if batch_index > 0:
@@ -249,52 +292,73 @@ def process():
             except FileNotFoundError:
                 pass
 
-        all_gas_records = current_data['gas_records']
-        all_ahu_data = current_data['ahu_data']
-        errors = current_data['warnings']
-        collected_data = all_gas_records if is_gas_airborne else all_ahu_data
-        if not collected_data:
-            error_msg = messages['extract_failed']
-            if errors:
-                error_msg += "\n" + "\n".join(errors)
-            return jsonify({'error': error_msg}), 400
-
-        # Generate Excel
-        generator = GENERATORS[test_type]
-        test_config = TEST_TYPES[test_type]
-        output_filename = test_config['excel_filename']
-        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
-
-        generator(collected_data, output_path)
-
-        # Clean up uploaded files
-        for p in saved_paths:
+        response = _generate_report(current_data, test_type, messages)
+        for path in saved_paths:
             try:
-                os.remove(p)
-            except:
+                os.remove(path)
+            except OSError:
                 pass
-
-        result = {
-            'success': True,
-            'filename': output_filename,
-            'download_url': f'/download/{output_filename}',
-        }
-        if is_gas_airborne:
-            result['record_count'] = len(all_gas_records)
-        else:
-            result['ahu_count'] = len(all_ahu_data)
-            result['ahu_list'] = sorted(all_ahu_data.keys(), key=ahu_sort_key)
-
-        if errors:
-            result['warnings'] = errors
-
-        return jsonify(result)
+        return response
 
     except Exception as e:
         traceback.print_exc()
         language = request.form.get('language', 'ko').strip()
         messages = ERROR_MESSAGES.get(language, ERROR_MESSAGES['ko'])
         return jsonify({'error': f"{messages['server_error']} {str(e)}"}), 500
+
+
+@app.route('/process/complete', methods=['POST'])
+def complete_process():
+    """Merge independently processed PDFs in upload order and generate one report."""
+    language = request.form.get('language', 'ko').strip()
+    messages = ERROR_MESSAGES.get(language, ERROR_MESSAGES['ko'])
+    test_type = request.form.get('test_type')
+    if test_type not in CLAUDE_EXTRACTORS:
+        return jsonify({'error': messages['invalid_test']}), 400
+    try:
+        batch_id = request.form.get('batch_id')
+        _batch_state_path(batch_id)
+        batch_total = int(request.form.get('batch_total', '0'))
+        if not 1 <= batch_total <= 1000:
+            raise ValueError('Invalid batch metadata.')
+        paths = [_parallel_state_path(batch_id, index) for index in range(batch_total)]
+        if not all(os.path.exists(path) for path in paths):
+            return jsonify({'error': 'Some PDFs are not finished. Restart upload.'}), 400
+        merged = {}
+        for path in paths:
+            with open(path, 'r', encoding='utf-8') as state_file:
+                state = json.load(state_file)
+            if state['test_type'] != test_type or state['batch_total'] != batch_total:
+                return jsonify({'error': 'Batch metadata does not match. Restart upload.'}), 400
+            merged = _merge_batch_data(merged, state['data'], test_type)
+        response = _generate_report(merged, test_type, messages)
+        for path in paths:
+            os.remove(path)
+        return response
+    except (ValueError, TypeError) as error:
+        return jsonify({'error': str(error)}), 400
+    except Exception as error:
+        traceback.print_exc()
+        return jsonify({'error': f"{messages['server_error']} {error}"}), 500
+
+
+@app.route('/process/cancel', methods=['POST'])
+def cancel_process():
+    """Discard partial OCR data after a parallel upload fails."""
+    try:
+        batch_id = request.form.get('batch_id')
+        _batch_state_path(batch_id)
+        batch_total = int(request.form.get('batch_total', '0'))
+        if not 1 <= batch_total <= 1000:
+            raise ValueError('Invalid batch metadata.')
+        for index in range(batch_total):
+            try:
+                os.remove(_parallel_state_path(batch_id, index))
+            except FileNotFoundError:
+                pass
+        return jsonify({'success': True})
+    except (ValueError, TypeError) as error:
+        return jsonify({'error': str(error)}), 400
 
 
 @app.route('/download/<filename>')
