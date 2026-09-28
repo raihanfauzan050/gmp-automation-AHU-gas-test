@@ -135,6 +135,7 @@ def process():
 
         # Save uploaded files
         saved_paths = []
+        original_names = {}
         for f in files:
             if f and allowed_file(f.filename):
                 filename = secure_filename(f.filename)
@@ -142,6 +143,7 @@ def process():
                 filepath = os.path.join(UPLOAD_FOLDER, unique_name)
                 f.save(filepath)
                 saved_paths.append(filepath)
+                original_names[filepath] = f.filename
 
         if not saved_paths:
             return jsonify({'error': messages['no_valid_files']}), 400
@@ -173,7 +175,7 @@ def process():
                     raise ValueError(messages['empty_data'])
                 ahu_num = extract_ahu_number(
                     data.get('ahu'),
-                    pdf_path,
+                    original_names[pdf_path],
                 )
                 if ahu_num == 'unknown':
                     raise ValueError(messages['ahu_missing'])

@@ -9,6 +9,28 @@ from excel_generator import generate_airborne_particle_excel
 
 
 class AirborneParticleExcelTest(unittest.TestCase):
+    def test_airborne_averages_are_whole_numbers_in_data_and_table(self):
+        room = {
+            'grade': 'B', 'room_number': '2142', 'room_name': 'Room',
+            'measurements': [
+                {'point': 1, 'value_05': 1, 'value_50': 1},
+                {'point': 2, 'value_05': 2, 'value_50': 2},
+            ],
+        }
+        data = {'33': [{'semester': '2025 (하)', 'date': '2025.08.02', 'rooms': [room]}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, 'airborne.xlsx')
+            generate_airborne_particle_excel(data, path)
+            workbook = load_workbook(path, data_only=False)
+
+        data_sheet = workbook['AHU-33 Data']
+        table_sheet = workbook['AHU-33 Table']
+        self.assertEqual(data_sheet['G9'].value, '=ROUND(AVERAGE(F9:F10),0)')
+        self.assertEqual(data_sheet['I9'].value, '=ROUND(AVERAGE(H9:H10),0)')
+        self.assertEqual(table_sheet['E2'].value, 2)
+        self.assertEqual(table_sheet['F2'].value, 2)
+
     def test_generates_workbook_with_numeric_and_unknown_ahu_keys(self):
         room = {
             'no_start': 1,

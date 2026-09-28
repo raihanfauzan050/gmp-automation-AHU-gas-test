@@ -33,6 +33,11 @@ class AhuNumberTest(unittest.TestCase):
         filename = '/tmp/uuid_AHU-37_air_change_rate.pdf'
         self.assertEqual(extract_ahu_number('unknown', filename), '37')
 
+    def test_falls_back_to_number_before_pdf_extension(self):
+        self.assertEqual(extract_ahu_number('unknown', '/tmp/AHU-26.pdf'), '26')
+        self.assertEqual(extract_ahu_number('unknown', '/tmp/공조기-26.pdf'), '26')
+        self.assertEqual(extract_ahu_number('unknown', '/tmp/AHU-26.5.pdf'), 'unknown')
+
     def test_rejects_zero_and_falls_back_to_filename(self):
         filename = '/tmp/uuid_AHU-33_airborne_particle.pdf'
         self.assertEqual(extract_ahu_number('0', filename), '33')
@@ -50,6 +55,36 @@ class AhuProcessTest(unittest.TestCase):
         'air_change_rate': ('rooms', [{'room': 'test'}]),
         'hepa_filter': ('items', [{'item': 'test'}]),
     }
+
+    def test_falls_back_to_original_korean_filename(self):
+        generated = {}
+
+        def extractor(_path, api_key=None):
+            return {'ahu': 'unknown', 'date': '2025.08.01', 'rooms': [{'room': 'test'}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(app_module, 'ANTHROPIC_API_KEY', 'test-key'),
+                patch.object(app_module, 'UPLOAD_FOLDER', temp_dir),
+                patch.object(app_module, 'OUTPUT_FOLDER', temp_dir),
+                patch.dict(app_module.CLAUDE_EXTRACTORS, {'airborne_particle': extractor}),
+                patch.dict(app_module.GENERATORS, {
+                    'airborne_particle': lambda records, path: generated.update(records)
+                }),
+            ):
+                response = app_module.app.test_client().post(
+                    '/process',
+                    data={
+                        'test_type': 'airborne_particle',
+                        'language': 'en',
+                        'pdf_files': (BytesIO(b'%PDF-1.4'), '하계모니터링_공조기-26.pdf'),
+                    },
+                    content_type='multipart/form-data',
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['ahu_list'], ['26'])
+        self.assertIn('26', generated)
 
     def test_processes_valid_pdfs_and_warns_about_missing_ahu_identity(self):
         for test_type, (data_key, measurements) in self.TEST_CASES.items():
