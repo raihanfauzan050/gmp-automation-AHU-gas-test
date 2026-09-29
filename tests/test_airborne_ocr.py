@@ -5,10 +5,14 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from ocr_engine import extract_airborne_particle, image_to_base64
+from ocr_engine import PROMPT_AIRBORNE_PARTICLE, extract_airborne_particle, image_to_base64
 
 
 class AirborneParticleOcrTest(unittest.TestCase):
+    def test_requests_unrounded_measurement_values(self):
+        self.assertIn('Preserve every printed decimal digit', PROMPT_AIRBORNE_PARTICLE)
+        self.assertIn('211281.8', PROMPT_AIRBORNE_PARTICLE)
+
     def test_large_images_fit_anthropic_multi_image_limit_without_changing_source(self):
         source = Image.new('RGB', (2200, 2600), 'white')
 

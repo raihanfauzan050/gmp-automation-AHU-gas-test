@@ -9,6 +9,27 @@ from excel_generator import generate_airborne_particle_excel
 
 
 class AirborneParticleExcelTest(unittest.TestCase):
+    def test_measurement_values_keep_printed_decimals(self):
+        room = {
+            'grade': 'D', 'room_number': '2404', 'room_name': '전실',
+            'measurements': [
+                {'point': 1, 'value_05': 211281.8, 'value_50': 3982.9},
+                {'point': 2, 'value_05': 195367.4, 'value_50': 2595.8},
+            ],
+        }
+        data = {'2': [{'semester': '2024 (하)', 'date': '2024.08.01', 'rooms': [room]}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, 'airborne.xlsx')
+            generate_airborne_particle_excel(data, path)
+            workbook = load_workbook(path, data_only=False)
+
+        sheet = workbook['AHU-2 Data']
+        self.assertEqual([(sheet.cell(row, 6).value, sheet.cell(row, 8).value)
+                          for row in (9, 10)], [(211281.8, 3982.9), (195367.4, 2595.8)])
+        self.assertEqual(sheet['G9'].value, '=ROUND(AVERAGE(F9:F10),0)')
+        self.assertEqual(sheet['I9'].value, '=ROUND(AVERAGE(H9:H10),0)')
+
     def test_groups_same_room_number_across_years_despite_ocr_name_variant(self):
         def room(name, value):
             return {
@@ -39,25 +60,31 @@ class AirborneParticleExcelTest(unittest.TestCase):
         ])
         self.assertEqual(chart['E3'].value, "='AHU-33 Table'!$E$4")
 
-    def test_rejects_ambiguous_room_number_in_same_semester(self):
-        def room(name):
+    def test_keeps_repeated_room_number_in_same_semester(self):
+        def room(name, value):
             return {
                 'grade': 'C', 'room_number': '2148', 'room_name': name,
-                'measurements': [{'point': 1, 'value_05': 1, 'value_50': 0}],
+                'measurements': [{'point': 1, 'value_05': value, 'value_50': 0}],
             }
 
         data = {'33': [
-            {'semester': '2024 (하)', 'date': '2024.08.01', 'rooms': [room('작업실')]},
+            {'semester': '2024 (하)', 'date': '2024.08.01', 'rooms': [room('작업실', 24)]},
             {'semester': '2025 (하)', 'date': '2025.08.01',
-             'rooms': [room('작업실'), room('검사실')]},
+             'rooms': [room('작업실', 25), room('검사실', 26)]},
         ]}
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, 'airborne.xlsx')
-            with self.assertRaisesRegex(ValueError, '2148.*2025 \\(하\\)'):
-                generate_airborne_particle_excel(data, path)
-            self.assertFalse(os.path.exists(path))
+            generate_airborne_particle_excel(data, path)
+            workbook = load_workbook(path)
 
-    def test_rejects_ocr_variant_collision_instead_of_splitting_chart(self):
+        chart = workbook['AHU-33 Pivot 0.5µm Grade C']
+        self.assertEqual(chart.max_row, 3)
+        self.assertEqual(chart['D2'].value, "='AHU-33 Table'!$E$2")
+        self.assertEqual(chart['E2'].value, "='AHU-33 Table'!$E$4")
+        self.assertEqual(chart['D3'].value, "='AHU-33 Table'!$E$3")
+        self.assertIsNone(chart['E3'].value)
+
+    def test_ocr_variant_does_not_split_primary_room_when_repeated(self):
         def room(name):
             return {
                 'grade': 'C', 'room_number': '2148', 'room_name': name,
@@ -73,8 +100,34 @@ class AirborneParticleExcelTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, 'airborne.xlsx')
-            with self.assertRaisesRegex(ValueError, '2148.*2025 \\(하\\)'):
-                generate_airborne_particle_excel(data, path)
+            generate_airborne_particle_excel(data, path)
+            workbook = load_workbook(path)
+
+        chart = workbook['AHU-33 Pivot 0.5µm Grade C']
+        self.assertEqual(chart.max_row, 3)
+        self.assertEqual([chart.cell(2, col).value for col in (4, 5, 6)], [
+            "='AHU-33 Table'!$E$2", "='AHU-33 Table'!$E$3", "='AHU-33 Table'!$E$5",
+        ])
+        self.assertEqual(chart['E3'].value, "='AHU-33 Table'!$E$4")
+
+    def test_keeps_two_identical_room_names_in_same_semester(self):
+        def room(value):
+            return {
+                'grade': 'D', 'room_number': '2461', 'room_name': '작업실',
+                'measurements': [{'point': 1, 'value_05': value, 'value_50': 0}],
+            }
+
+        data = {'2': [{'semester': '2026 (하)', 'date': '2026.08.01',
+                       'rooms': [room(10), room(20)]}]}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, 'airborne.xlsx')
+            generate_airborne_particle_excel(data, path)
+            workbook = load_workbook(path)
+
+        chart = workbook['AHU-2 Pivot 0.5µm Grade D']
+        self.assertEqual(chart.max_row, 3)
+        self.assertEqual(chart['D2'].value, "='AHU-2 Table'!$E$2")
+        self.assertEqual(chart['D3'].value, "='AHU-2 Table'!$E$3")
 
     def test_airborne_averages_are_whole_numbers_in_data_and_table(self):
         room = {

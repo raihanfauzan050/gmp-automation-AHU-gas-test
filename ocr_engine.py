@@ -129,8 +129,8 @@ Extract ALL data and return ONLY valid JSON (no other text) with this exact stru
       "room_number": "2142",
       "room_name": "무균 실험실",
       "measurements": [
-        {"point": 1, "value_05": 121, "value_50": 7},
-        {"point": 2, "value_05": 194, "value_50": 0}
+        {"point": 1, "value_05": 211281.8, "value_50": 3982.9},
+        {"point": 2, "value_05": 195367.4, "value_50": 2595.8}
       ]
     }
   ]
@@ -142,8 +142,9 @@ IMPORTANT RULES:
 - "room_number" is from 실번호 column
 - "room_name" is from 실명 column
 - "point" is from 측정번호 column
-- "value_05" is the 0.5 µm measurement value (integer)
-- "value_50" is the 5.0 µm measurement value (integer)
+- "value_05" is the 0.5 µm measurement value. Preserve every printed decimal digit; do not round or truncate.
+- "value_50" is the 5.0 µm measurement value. Preserve every printed decimal digit; do not round or truncate.
+- Return measurement values as JSON numbers, including decimal points when printed (e.g., 211281.8, not 211282).
 - Group measurements by room (same room_number + room_name = same room object)
 - Include ALL pages of data
 - Inspect the metadata section on every page and read AHU ONLY from the 해당 공조기 field.

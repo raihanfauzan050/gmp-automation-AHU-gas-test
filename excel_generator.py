@@ -826,22 +826,18 @@ def _create_airborne_chart_sheet(wb, ahu_num, table_ws, particle_size, selected_
                           },
                           'value_ref': _cell_link_formula(table_ws, r, value_col)})
 
-    # Room identity is grade + room number, independent of OCR spelling.
-    # Equipment in the same room has its own category. Never silently discard
-    # a second measurement for the same room and semester.
-    room_periods = set()
+    # Match rooms across semesters by grade and room number. When one semester
+    # contains repeated measurements, give each occurrence a separate slot so
+    # no value is lost; equipment keeps its own name-based category.
+    room_period_counts = {}
     for row in data_rows:
         grade_key, room_key, name_key = row['category_id']
         is_equipment = any(marker in name_key for marker in ('bsc', 'passbox', 'biosafetycabinet'))
         if room_key.isdigit() and not is_equipment:
             period_key = (grade_key, room_key, row['semester'])
-            if period_key in room_periods:
-                raise ValueError(
-                    f'AHU-{ahu_num} has multiple Grade {row["grade"]} measurements '
-                    f'for room {room_key} in {row["semester"]}; check the source PDFs.'
-                )
-            room_periods.add(period_key)
-            row['category_id'] = (grade_key, room_key, 'room')
+            occurrence = room_period_counts.get(period_key, 0) + 1
+            room_period_counts[period_key] = occurrence
+            row['category_id'] = (grade_key, room_key, 'room', occurrence)
 
     semesters = sorted({d['semester'] for d in data_rows if d['semester']}, key=semester_sort_key)
 
