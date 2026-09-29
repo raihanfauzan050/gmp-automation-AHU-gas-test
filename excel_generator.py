@@ -722,13 +722,13 @@ def _create_airborne_data_sheet(wb, ahu_num, ahu_semesters):
 
             # Average 0.5 µm (merged cell with AVERAGE formula)
             avg_cell_05 = ws.cell(row=start_row, column=7)
-            avg_cell_05.value = f"=ROUND(AVERAGE(F{start_row}:F{end_row}),0)"
+            avg_cell_05.value = f"=AVERAGE(F{start_row}:F{end_row})"
             if n_points > 1:
                 ws.merge_cells(start_row=start_row, start_column=7, end_row=end_row, end_column=7)
 
             # Average 5.0 µm (merged cell with AVERAGE formula)
             avg_cell_50 = ws.cell(row=start_row, column=9)
-            avg_cell_50.value = f"=ROUND(AVERAGE(H{start_row}:H{end_row}),0)"
+            avg_cell_50.value = f"=AVERAGE(H{start_row}:H{end_row})"
             if n_points > 1:
                 ws.merge_cells(start_row=start_row, start_column=9, end_row=end_row, end_column=9)
 
@@ -774,8 +774,8 @@ def _create_airborne_table_sheet(wb, ahu_num, ahu_semesters):
             ws.cell(row=row, column=2, value=room['grade'])
             ws.cell(row=row, column=3, value=int(room['room_number']) if room['room_number'].isdigit() else room['room_number'])
             ws.cell(row=row, column=4, value=room['room_name'])
-            ws.cell(row=row, column=5, value=math.floor(avg_05 + 0.5))
-            ws.cell(row=row, column=6, value=math.floor(avg_50 + 0.5))
+            ws.cell(row=row, column=5, value=avg_05)
+            ws.cell(row=row, column=6, value=avg_50)
             ws.cell(row=row, column=7, value=semester_label)
             for offset, (_, value) in enumerate(limit_columns, 8):
                 ws.cell(row=row, column=offset, value=value)

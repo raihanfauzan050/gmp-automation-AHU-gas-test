@@ -27,8 +27,11 @@ class AirborneParticleExcelTest(unittest.TestCase):
         sheet = workbook['AHU-2 Data']
         self.assertEqual([(sheet.cell(row, 6).value, sheet.cell(row, 8).value)
                           for row in (9, 10)], [(211281.8, 3982.9), (195367.4, 2595.8)])
-        self.assertEqual(sheet['G9'].value, '=ROUND(AVERAGE(F9:F10),0)')
-        self.assertEqual(sheet['I9'].value, '=ROUND(AVERAGE(H9:H10),0)')
+        self.assertEqual(sheet['G9'].value, '=AVERAGE(F9:F10)')
+        self.assertEqual(sheet['I9'].value, '=AVERAGE(H9:H10)')
+        table = workbook['AHU-2 Table']
+        self.assertAlmostEqual(table['E2'].value, 203324.6)
+        self.assertAlmostEqual(table['F2'].value, 3289.35)
 
     def test_groups_same_room_number_across_years_despite_ocr_name_variant(self):
         def room(name, value):
@@ -129,7 +132,7 @@ class AirborneParticleExcelTest(unittest.TestCase):
         self.assertEqual(chart['D2'].value, "='AHU-2 Table'!$E$2")
         self.assertEqual(chart['D3'].value, "='AHU-2 Table'!$E$3")
 
-    def test_airborne_averages_are_whole_numbers_in_data_and_table(self):
+    def test_airborne_averages_keep_fractional_values_in_data_and_table(self):
         room = {
             'grade': 'B', 'room_number': '2142', 'room_name': 'Room',
             'measurements': [
@@ -146,10 +149,10 @@ class AirborneParticleExcelTest(unittest.TestCase):
 
         data_sheet = workbook['AHU-33 Data']
         table_sheet = workbook['AHU-33 Table']
-        self.assertEqual(data_sheet['G9'].value, '=ROUND(AVERAGE(F9:F10),0)')
-        self.assertEqual(data_sheet['I9'].value, '=ROUND(AVERAGE(H9:H10),0)')
-        self.assertEqual(table_sheet['E2'].value, 2)
-        self.assertEqual(table_sheet['F2'].value, 2)
+        self.assertEqual(data_sheet['G9'].value, '=AVERAGE(F9:F10)')
+        self.assertEqual(data_sheet['I9'].value, '=AVERAGE(H9:H10)')
+        self.assertEqual(table_sheet['E2'].value, 1.5)
+        self.assertEqual(table_sheet['F2'].value, 1.5)
 
     def test_generates_workbook_with_numeric_and_unknown_ahu_keys(self):
         room = {
